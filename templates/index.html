@@ -158,6 +158,28 @@
               </div>
             </div>
 
+            <!-- Smart Crop -->
+            <div id="cropSection" class="mb-6">
+              <label class="block text-sm font-medium text-slate-300 mb-3">
+                <span class="inline-flex items-center gap-1.5">✂️ Smart Crop — مقاس المنصة</span>
+              </label>
+              <div id="cropList" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <button type="button" data-crop="none" class="crop-btn active px-3 py-2.5 rounded-xl border border-slate-600 text-xs sm:text-sm font-medium text-slate-300 hover:border-brand-500/50 transition">
+                  أصلي
+                </button>
+                <button type="button" data-crop="16:9" class="crop-btn px-3 py-2.5 rounded-xl border border-slate-600 text-xs sm:text-sm font-medium text-slate-300 hover:border-brand-500/50 transition">
+                  YouTube<br><span class="text-[10px] text-slate-500">16:9</span>
+                </button>
+                <button type="button" data-crop="9:16" class="crop-btn px-3 py-2.5 rounded-xl border border-slate-600 text-xs sm:text-sm font-medium text-slate-300 hover:border-brand-500/50 transition">
+                  Reels / TikTok<br><span class="text-[10px] text-slate-500">9:16</span>
+                </button>
+                <button type="button" data-crop="1:1" class="crop-btn px-3 py-2.5 rounded-xl border border-slate-600 text-xs sm:text-sm font-medium text-slate-300 hover:border-brand-500/50 transition">
+                  Instagram<br><span class="text-[10px] text-slate-500">1:1</span>
+                </button>
+              </div>
+              <p class="mt-2 text-[11px] text-slate-500">يتم قص وسط الفيديو ليناسب مقاس المنصة المختارة</p>
+            </div>
+
             <!-- Audio note -->
             <div id="audioNote" class="hidden mb-6 text-sm text-slate-400 bg-slate-900/40 rounded-xl px-4 py-3 border border-slate-700/50">
               سيتم استخراج أفضل جودة صوت متاحة وتحويلها إلى MP3 (192kbps تقريباً)
@@ -175,6 +197,17 @@
               <div id="downloadSpinner" class="spinner hidden"></div>
             </button>
 
+            <!-- QR Share -->
+            <button
+              id="qrBtn"
+              type="button"
+              class="mt-3 w-full py-3 rounded-2xl border border-slate-600 text-sm font-semibold text-slate-300 hover:bg-slate-800/60 hover:border-brand-500/40 transition flex items-center justify-center gap-2"
+            >
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+              </svg>
+              مشاركة عبر QR
+            </button>
 
             <!-- Progress -->
             <div id="progressSection" class="hidden mt-4">
@@ -220,10 +253,28 @@
     </footer>
   </div>
 
+  <!-- QR Modal -->
+  <div id="qrModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="glass rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center shadow-2xl animate-slide-up relative">
+      <button id="qrClose" type="button" class="absolute top-4 left-4 w-8 h-8 rounded-full bg-slate-800/80 text-slate-400 hover:text-white flex items-center justify-center transition">×</button>
+      <h3 class="text-lg font-bold text-white mb-1">شارك عبر QR</h3>
+      <p class="text-xs text-slate-400 mb-5">امسح الكود لفتح رابط الفيديو مباشرة</p>
+      <div class="bg-white rounded-2xl p-4 inline-block mb-4">
+        <canvas id="qrCanvas" width="200" height="200"></canvas>
+      </div>
+      <p id="qrLinkText" class="text-[11px] text-slate-500 break-all mb-4 px-2"></p>
+      <button id="qrCopyBtn" type="button" class="w-full py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold transition">
+        نسخ الرابط
+      </button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <script>
     // State
     let currentInfo = null;
     let selectedType = 'mp4';
+    let selectedCrop = 'none';
     let selectedQuality = null;
 
     // Elements
@@ -239,6 +290,7 @@
     const platformBadge = document.getElementById('platformBadge');
     const qualitySection = document.getElementById('qualitySection');
     const qualityList = document.getElementById('qualityList');
+    const cropSection = document.getElementById('cropSection');
     const audioNote = document.getElementById('audioNote');
     const downloadBtn = document.getElementById('downloadBtn');
     const downloadBtnText = document.getElementById('downloadBtnText');
@@ -246,6 +298,13 @@
     const progressSection = document.getElementById('progressSection');
     const progressText = document.getElementById('progressText');
     const tabBtns = document.querySelectorAll('.tab-btn');
+    const cropBtns = document.querySelectorAll('.crop-btn');
+    const qrBtn = document.getElementById('qrBtn');
+    const qrModal = document.getElementById('qrModal');
+    const qrClose = document.getElementById('qrClose');
+    const qrCanvas = document.getElementById('qrCanvas');
+    const qrLinkText = document.getElementById('qrLinkText');
+    const qrCopyBtn = document.getElementById('qrCopyBtn');
 
     function showError(msg) {
       errorBox.textContent = msg;
@@ -282,12 +341,59 @@
 
         if (selectedType === 'mp3') {
           qualitySection.classList.add('hidden');
+          cropSection.classList.add('hidden');
           audioNote.classList.remove('hidden');
         } else {
           qualitySection.classList.remove('hidden');
+          cropSection.classList.remove('hidden');
           audioNote.classList.add('hidden');
         }
       });
+    });
+
+    // Smart Crop selection
+    cropBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        cropBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedCrop = btn.dataset.crop;
+      });
+    });
+
+    // QR Modal
+    function openQrModal() {
+      const videoUrl = urlInput.value.trim() || (currentInfo && currentInfo.webpage_url) || window.location.href;
+      const shareUrl = videoUrl;
+      qrLinkText.textContent = shareUrl;
+      if (typeof QRCode !== 'undefined') {
+        QRCode.toCanvas(qrCanvas, shareUrl, {
+          width: 200,
+          margin: 2,
+          color: { dark: '#0f172a', light: '#ffffff' }
+        }, function (err) {
+          if (err) console.error(err);
+        });
+      }
+      qrModal.classList.remove('hidden');
+      qrModal.classList.add('flex');
+    }
+    function closeQrModal() {
+      qrModal.classList.add('hidden');
+      qrModal.classList.remove('flex');
+    }
+    qrBtn.addEventListener('click', openQrModal);
+    qrClose.addEventListener('click', closeQrModal);
+    qrModal.addEventListener('click', (e) => {
+      if (e.target === qrModal) closeQrModal();
+    });
+    qrCopyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(qrLinkText.textContent);
+        qrCopyBtn.textContent = 'تم النسخ ✓';
+        setTimeout(() => { qrCopyBtn.textContent = 'نسخ الرابط'; }, 2000);
+      } catch (_) {
+        qrCopyBtn.textContent = 'فشل النسخ';
+      }
     });
 
     // Analyze
@@ -358,12 +464,17 @@
         qualityList.appendChild(btn);
       });
 
-      // Reset to video tab
+      // Reset to video tab + original crop
       selectedType = 'mp4';
+      selectedCrop = 'none';
       tabBtns.forEach(b => {
         b.classList.toggle('active', b.dataset.type === 'mp4');
       });
+      cropBtns.forEach(b => {
+        b.classList.toggle('active', b.dataset.crop === 'none');
+      });
       qualitySection.classList.remove('hidden');
+      cropSection.classList.remove('hidden');
       audioNote.classList.add('hidden');
     }
 
@@ -376,9 +487,13 @@
       setLoading(downloadBtnText, downloadSpinner, true);
       downloadBtn.disabled = true;
       progressSection.classList.remove('hidden');
-      progressText.textContent = selectedType === 'mp3'
-        ? 'جاري استخراج الصوت وتحويله إلى MP3...'
-        : 'جاري تحميل الفيديو ودمجه... قد يستغرق وقتاً حسب الحجم';
+      if (selectedType === 'mp3') {
+        progressText.textContent = 'جاري استخراج الصوت وتحويله إلى MP3...';
+      } else if (selectedCrop !== 'none') {
+        progressText.textContent = 'جاري التحميل وتطبيق Smart Crop... قد يستغرق وقتاً';
+      } else {
+        progressText.textContent = 'جاري تحميل الفيديو ودمجه... قد يستغرق وقتاً حسب الحجم';
+      }
 
       try {
         const res = await fetch('/api/download', {
@@ -387,12 +502,12 @@
           body: JSON.stringify({
             url,
             type: selectedType,
-            quality: selectedType === 'mp4' ? selectedQuality : null
+            quality: selectedType === 'mp4' ? selectedQuality : null,
+            crop: selectedType === 'mp4' ? selectedCrop : 'none'
           })
         });
 
         if (!res.ok) {
-          // Try to parse error JSON
           let errMsg = 'فشل التحميل';
           try {
             const errData = await res.json();
@@ -402,13 +517,11 @@
           return;
         }
 
-        // Get filename from Content-Disposition if possible
         const disposition = res.headers.get('Content-Disposition') || '';
         let filename = selectedType === 'mp3' ? 'audio.mp3' : 'video.mp4';
         const match = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
         if (match && match[1]) {
           filename = match[1].replace(/['"]/g, '');
-          // Decode URI if needed
           try { filename = decodeURIComponent(filename); } catch (_) {}
         }
 
