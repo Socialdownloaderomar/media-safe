@@ -9,25 +9,23 @@ import re
 import uuid
 import shutil
 import tempfile
+import subprocess
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file, after_this_request
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # for any form data
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
-# Temporary download directory
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "social_video_dl"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-# Allowed URL schemes
 URL_PATTERN = re.compile(r"^https?://", re.IGNORECASE)
 
-# yt-dlp common options
 YDL_OPTS_BASE = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
-    "js_runtimes": {"node": {}},  # use system node if available
+    "js_runtimes": {"node": {}},
     "extractor_args": {
         "youtube": {
             "player_client": ["android", "web"],
@@ -42,7 +40,6 @@ def is_safe_url(url: str) -> bool:
     url = url.strip()
     if not URL_PATTERN.match(url):
         return False
-    # Block obvious local / file attempts
     lowered = url.lower()
     if any(x in lowered for x in ["file://", "localhost", "127.0.0.1", "0.0.0.0", "[::]"]):
         return False
@@ -50,20 +47,15 @@ def is_safe_url(url: str) -> bool:
 
 
 def get_video_info(url: str) -> dict:
-    """Extract metadata and available formats without downloading."""
     import yt_dlp
 
-    opts = {
-        **YDL_OPTS_BASE,
-        "skip_download": True,
-    }
+    opts = {**YDL_OPTS_BASE, "skip_download": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
     if not info:
         raise ValueError("تعذر استخراج معلومات الفيديو")
 
-    # Build simplified quality options
     formats = info.get("formats") or []
     video_qualities = set()
     has_audio = False
@@ -73,7 +65,6 @@ def get_video_info(url: str) -> dict:
         acodec = f.get("acodec")
         vcodec = f.get("vcodec")
         if height and vcodec and vcodec != "none":
-            # Round to common buckets
             if height >= 2160:
                 video_qualities.add(2160)
             elif height >= 1440:
@@ -91,10 +82,8 @@ def get_video_info(url: str) -> dict:
         if acodec and acodec != "none":
             has_audio = True
 
-    # Always offer common ones if any video exists
     sorted_qualities = sorted(video_qualities, reverse=True)
 
-    # Thumbnail
     thumb = info.get("thumbnail")
     if not thumb and info.get("thumbnails"):
         thumb = info["thumbnails"][-1].get("url")
@@ -114,17 +103,11 @@ def get_video_info(url: str) -> dict:
 
 
 def download_media(url: str, media_type: str, quality: int | None = None) -> tuple[Path, str, str]:
-    """
-    Download video or audio.
-    Returns: (file_path, filename, mime_type)
-    """
     import yt_dlp
 
     job_id = str(uuid.uuid4())[:8]
     out_dir = DOWNLOAD_DIR / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Output template
     outtmpl = str(out_dir / "%(title).80B.%(ext)s")
 
     opts = {
@@ -146,9 +129,7 @@ def download_media(url: str, media_type: str, quality: int | None = None) -> tup
         preferred_ext = "mp3"
         mime = "audio/mpeg"
     else:
-        # Video MP4
         if quality:
-            # Prefer mp4 container, height <= requested, best video + best audio
             format_str = (
                 f"bestvideo[height<=?{quality}][ext=mp4]+bestaudio[ext=m4a]/"
                 f"bestvideo[height<=?{quality}]+bestaudio/"
@@ -164,15 +145,11 @@ def download_media(url: str, media_type: str, quality: int | None = None) -> tup
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        # Find the actual downloaded file
         filename = ydl.prepare_filename(info)
-        # After postprocess, extension may change
         path = Path(filename)
         if media_type == "mp3":
-            # Audio extraction changes ext
             path = path.with_suffix(".mp3")
             if not path.exists():
-                # Fallback search
                 candidates = list(out_dir.glob("*.mp3"))
                 if candidates:
                     path = candidates[0]
@@ -185,11 +162,30 @@ def download_media(url: str, media_type: str, quality: int | None = None) -> tup
         if not path.exists():
             raise FileNotFoundError("فشل حفظ الملف بعد التحميل")
 
-        # Sanitize final name
         safe_title = re.sub(r'[\\/*?:"<>|]', "", info.get("title") or "video")[:80]
         final_name = f"{safe_title}.{preferred_ext}"
-
         return path, final_name, mime
+
+
+def apply_smart_crop(input_path: Path, aspect: str) -> Path:
+    ratios = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1)}
+    if aspect not in ratios:
+        return input_path
+
+    w, h = ratios[aspect]
+    vf = f"crop='min(iw,ih*{w}/{h})':'min(ih,iw*{h}/{w})'"
+    output = input_path.with_name(f"{input_path.stem}_{w}x{h}{input_path.suffix}")
+    cmd = [
+        "ffmpeg", "-y", "-i", str(input_path),
+        "-vf", vf, "-c:a", "copy", "-movflags", "+faststart", str(output),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode != 0 or not output.exists():
+            return input_path
+        return output
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+        return input_path
 
 
 @app.route("/")
@@ -210,7 +206,6 @@ def analyze():
         return jsonify({"ok": True, "info": info})
     except Exception as e:
         msg = str(e)
-        # Clean common yt-dlp errors for user
         if "Unsupported URL" in msg or "No video" in msg:
             user_msg = "هذا الرابط غير مدعوم أو لا يحتوي على فيديو"
         elif "Private video" in msg or "Sign in" in msg:
@@ -228,12 +223,19 @@ def download():
     url = (data.get("url") or "").strip()
     media_type = (data.get("type") or "mp4").lower()
     quality = data.get("quality")
+    crop = (data.get("crop") or "none").strip().lower()
 
     if not is_safe_url(url):
         return jsonify({"ok": False, "error": "رابط غير صالح"}), 400
 
     if media_type not in ("mp4", "mp3"):
         return jsonify({"ok": False, "error": "نوع الملف غير مدعوم"}), 400
+
+    allowed_crops = {"none", "16:9", "9:16", "1:1"}
+    if crop not in allowed_crops:
+        crop = "none"
+    if media_type == "mp3":
+        crop = "none"
 
     try:
         quality_int = int(quality) if quality else None
@@ -243,10 +245,17 @@ def download():
     try:
         file_path, filename, mime = download_media(url, media_type, quality_int)
 
+        if crop != "none" and media_type == "mp4":
+            cropped = apply_smart_crop(file_path, crop)
+            if cropped != file_path and cropped.exists():
+                file_path = cropped
+                stem = Path(filename).stem
+                ratio_label = crop.replace(":", "x")
+                filename = f"{stem}_{ratio_label}.mp4"
+
         @after_this_request
         def cleanup(response):
             try:
-                # Remove the whole job folder after sending
                 job_dir = file_path.parent
                 if job_dir.exists() and job_dir.parent == DOWNLOAD_DIR:
                     shutil.rmtree(job_dir, ignore_errors=True)
@@ -271,7 +280,6 @@ def health():
 
 
 if __name__ == "__main__":
-    # Clean old temp files on start (optional)
     for old in DOWNLOAD_DIR.iterdir():
         if old.is_dir():
             shutil.rmtree(old, ignore_errors=True)
@@ -280,4 +288,6 @@ if __name__ == "__main__":
     print("  Social Video Downloader is running!")
     print("  Open: http://127.0.0.1:5000")
     print("=" * 50)
-    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
